@@ -5,6 +5,7 @@
 import argparse
 from datetime import datetime
 import logging
+import re
 from typing import Optional
 
 import nagiosplugin
@@ -114,14 +115,24 @@ class DiskIOResource(nagiosplugin.Resource):
             cookie["last_time"] = cur_time.timetuple()
 
 
+@nagiosplugin.guarded()
 def main():
     argp = argparse.ArgumentParser(description=__doc__)
     argp.add_argument(
         "-d",
         "--disk",
+        dest="disks",
         required=True,
         help="Name of the disk",
-        metavar="NAME"
+        metavar="NAME",
+        action="append",
+    )
+
+    argp.add_argument(
+        "--regex",
+        default=False,
+        help="Treat disk names as regex pattern",
+        action="store_true",
     )
 
     argument_mappings = {
@@ -194,25 +205,41 @@ def main():
     argp.add_argument('-v', '--verbose', action='count', default=0)
     args = argp.parse_args()
 
-    disk_name = args.disk
-    check = nagiosplugin.Check(
-        DiskIOResource(
-            disk_name=disk_name
-        )
-    )
+    disk_names = set()
+    available_disk_names = psutil.disk_io_counters(perdisk=True).keys()
+    logger.debug(f"Available disks: {', '.join(available_disk_names)}")
+    logger.debug(f"Disk patterns/names: {', '.join(args.disks)}")
+    logger.debug("Regex: {status}".format(status="enabled" if args.regex else "disabled"))
+    for disk_name_pattern in args.disks:
+        if args.regex:
+            regex = re.compile(disk_name_pattern)
+            for disk_name in available_disk_names:
+                if regex.match(disk_name):
+                    disk_names.add(disk_name)
+        else:
+            for disk_name in available_disk_names:
+                if disk_name == disk_name_pattern:
+                    disk_names.add(disk_name)
 
-    for argument_name, argument_config in argument_mappings.items():
-        extra_kwargs = {}
-        if "fmt_metric" in argument_config:
-            extra_kwargs["fmt_metric"] = argument_config["fmt_metric"]
+    logger.debug(f"Matching disks: {' '.join(disk_names)}")
 
-        context_class = argument_config.get("class", nagiosplugin.ScalarContext)
-        check.add(context_class(
-            name=f"{disk_name}.{argument_name}",
-            warning=getattr(args, f"warning_{argument_name}"),
-            critical=getattr(args, f"critical_{argument_name}"),
-            **extra_kwargs
+    check = nagiosplugin.Check()
+    for disk_name in disk_names:
+        check.add(DiskIOResource(
+                disk_name=disk_name
         ))
+        for argument_name, argument_config in argument_mappings.items():
+            extra_kwargs = {}
+            if "fmt_metric" in argument_config:
+                extra_kwargs["fmt_metric"] = argument_config["fmt_metric"]
+
+            context_class = argument_config.get("class", nagiosplugin.ScalarContext)
+            check.add(context_class(
+                name=f"{disk_name}.{argument_name}",
+                warning=getattr(args, f"warning_{argument_name}"),
+                critical=getattr(args, f"critical_{argument_name}"),
+                **extra_kwargs
+            ))
 
     check.main(verbose=args.verbose)
 
