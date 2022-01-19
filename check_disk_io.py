@@ -12,7 +12,7 @@ from typing import Optional
 import nagiosplugin
 import psutil
 
-logger = logging.getLogger('nagiosplugin')
+logger = logging.getLogger("nagiosplugin")
 
 
 class MissingValue(ValueError):
@@ -220,6 +220,9 @@ def main():
 
     argp.add_argument('-v', '--verbose', action='count', default=0)
     args = argp.parse_args()
+
+    runtime = nagiosplugin.Runtime()
+    runtime.verbose = args.verbose
 
     disk_names = set()
     available_disk_names = psutil.disk_io_counters(perdisk=True).keys()
