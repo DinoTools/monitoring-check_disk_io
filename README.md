@@ -56,6 +56,7 @@ Resources
 
 - Git-Repository: https://github.com/DinoTools/monitoring-check_disk_io
 - Issues: https://github.com/DinoTools/monitoring-check_disk_io/issues
+- Icinga Exchange: https://exchange.icinga.com/dinotools/check_disk_io
 
 License
 -------
