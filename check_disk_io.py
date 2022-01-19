@@ -5,6 +5,7 @@
 import argparse
 from datetime import datetime
 import logging
+import os
 import re
 from typing import Optional
 
@@ -29,10 +30,11 @@ class BooleanContext(nagiosplugin.Context):
 class DiskIOResource(nagiosplugin.Resource):
     name = "DISK IO"
 
-    def __init__(self, disk_name: str):
+    def __init__(self, disk_name: str, display_name: str):
         super().__init__()
 
         self.disk_name = disk_name
+        self.display_name = display_name
 
     @staticmethod
     def _calc_rate(
@@ -82,7 +84,7 @@ class DiskIOResource(nagiosplugin.Resource):
                 attr_name = value_name
             values[value_name] = getattr(disk_counters, attr_name)
             yield nagiosplugin.Metric(
-                name=f"{self.disk_name}.{value_name}",
+                name=f"{self.display_name}.{value_name}",
                 value=values[value_name],
                 uom=value_uom_mappings.get(value_name),
             )
@@ -104,7 +106,7 @@ class DiskIOResource(nagiosplugin.Resource):
                         factor=value_factor_mappings.get(f"{value_name}_rate", 1)
                     )
                     yield nagiosplugin.Metric(
-                        name=f"{self.disk_name}.{value_name}_rate",
+                        name=f"{self.display_name}.{value_name}_rate",
                         value=value,
                         uom=value_uom_mappings.get(f"{value_name}_rate"),
                         min=value_min_mappings.get(f"{value_name}_rate", 0),
@@ -132,6 +134,20 @@ def main():
         "--regex",
         default=False,
         help="Treat disk names as regex pattern",
+        action="store_true",
+    )
+
+    argp.add_argument(
+        "--show-mountpoint",
+        default=False,
+        help="Try to resolve and report the mountpoint instead of the device name. (only: Linux)",
+        action="store_true",
+    )
+
+    argp.add_argument(
+        "--use-mountpoint",
+        default=False,
+        help="Try to resolve and use the mountpoint instead of the device name for the disk option. (only: Linux)",
         action="store_true",
     )
 
@@ -208,25 +224,49 @@ def main():
     disk_names = set()
     available_disk_names = psutil.disk_io_counters(perdisk=True).keys()
     logger.debug(f"Available disks: {', '.join(available_disk_names)}")
+
+    device_mountpont_mappings = dict([(disk_name, disk_name) for disk_name in available_disk_names])
+    if args.use_mountpoint or args.show_mountpoint:
+        if psutil.LINUX:
+            device_mountpoint = []
+            for partition in psutil.disk_partitions():
+                device_shortname = os.path.basename(os.path.realpath(partition.device))
+                logger.debug(f"Resolved display_name for device '{device_shortname}' to '{partition.mountpoint}'")
+                device_mountpoint.append((device_shortname, partition.mountpoint))
+            # We sort the devices and mountpoints to have a predictive order
+            device_mountpont_mappings = dict(sorted(device_mountpoint))
+
     logger.debug(f"Disk patterns/names: {', '.join(args.disks)}")
     logger.debug("Regex: {status}".format(status="enabled" if args.regex else "disabled"))
     for disk_name_pattern in args.disks:
         if args.regex:
             regex = re.compile(disk_name_pattern)
-            for disk_name in available_disk_names:
-                if regex.match(disk_name):
+            for disk_name, mountpoint in device_mountpont_mappings.items():
+                if (
+                    not args.use_mountpoint and regex.match(disk_name) or
+                    args.use_mountpoint and regex.match(mountpoint)
+                ):
                     disk_names.add(disk_name)
         else:
-            for disk_name in available_disk_names:
-                if disk_name == disk_name_pattern:
+            for disk_name, mountpoint in device_mountpont_mappings.items():
+                if (
+                    not args.use_mountpoint and disk_name == disk_name_pattern or
+                    args.use_mountpoint and mountpoint == disk_name_pattern
+                ):
                     disk_names.add(disk_name)
 
     logger.debug(f"Matching disks: {' '.join(disk_names)}")
 
     check = nagiosplugin.Check()
     for disk_name in disk_names:
+        if args.show_mountpoint:
+            display_name = device_mountpont_mappings[disk_name]
+        else:
+            display_name = disk_name
+
         check.add(DiskIOResource(
-                disk_name=disk_name
+            disk_name=disk_name,
+            display_name=display_name,
         ))
         for argument_name, argument_config in argument_mappings.items():
             extra_kwargs = {}
@@ -235,7 +275,7 @@ def main():
 
             context_class = argument_config.get("class", nagiosplugin.ScalarContext)
             check.add(context_class(
-                name=f"{disk_name}.{argument_name}",
+                name=f"{display_name}.{argument_name}",
                 warning=getattr(args, f"warning_{argument_name}"),
                 critical=getattr(args, f"critical_{argument_name}"),
                 **extra_kwargs
