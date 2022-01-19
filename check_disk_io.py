@@ -131,6 +131,15 @@ def main():
     )
 
     argp.add_argument(
+        "--disk-exclude",
+        dest="disk_excludes",
+        help="Name of the disk to exclude",
+        metavar="NAME",
+        action="append",
+        default=[],
+    )
+
+    argp.add_argument(
         "--regex",
         default=False,
         help="Treat disk names as regex pattern",
@@ -241,6 +250,8 @@ def main():
 
     logger.debug(f"Disk patterns/names: {', '.join(args.disks)}")
     logger.debug("Regex: {status}".format(status="enabled" if args.regex else "disabled"))
+
+    # First add all matching disks to the list ...
     for disk_name_pattern in args.disks:
         if args.regex:
             regex = re.compile(disk_name_pattern)
@@ -257,6 +268,25 @@ def main():
                     args.use_mountpoint and mountpoint == disk_name_pattern
                 ):
                     disk_names.add(disk_name)
+
+    logger.debug(f"Disk exclude patterns/names: {', '.join(args.disk_excludes)}")
+    # ... than remove all excluded from the list
+    for disk_name_pattern in args.disk_excludes:
+        if args.regex:
+            regex = re.compile(disk_name_pattern)
+            for disk_name, mountpoint in device_mountpont_mappings.items():
+                if (
+                    not args.use_mountpoint and regex.match(disk_name) or
+                    args.use_mountpoint and regex.match(mountpoint)
+                ):
+                    disk_names.remove(disk_name)
+        else:
+            for disk_name, mountpoint in device_mountpont_mappings.items():
+                if (
+                    not args.use_mountpoint and disk_name == disk_name_pattern or
+                    args.use_mountpoint and mountpoint == disk_name_pattern
+                ):
+                    disk_names.remove(disk_name)
 
     logger.debug(f"Matching disks: {' '.join(disk_names)}")
 
