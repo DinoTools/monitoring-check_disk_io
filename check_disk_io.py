@@ -30,11 +30,12 @@ class BooleanContext(nagiosplugin.Context):
 class DiskIOResource(nagiosplugin.Resource):
     name = "DISK IO"
 
-    def __init__(self, disk_name: str, display_name: str):
+    def __init__(self, disk_name: str, display_name: str, cookie_filename: str):
         super().__init__()
 
         self.disk_name = disk_name
         self.display_name = display_name
+        self.cookie_filename = cookie_filename
 
     @staticmethod
     def _calc_rate(
@@ -88,7 +89,11 @@ class DiskIOResource(nagiosplugin.Resource):
                 value=values[value_name],
                 uom=value_uom_mappings.get(value_name),
             )
-        with nagiosplugin.Cookie(f"/tmp/check_disk_io_{self.disk_name}.data") as cookie:
+
+        cookie_filename = self.cookie_filename.format(
+            name=f"{escape_filename(self.disk_name)}_{escape_filename(self.display_name)}"
+        )
+        with nagiosplugin.Cookie(cookie_filename) as cookie:
             last_time_tuple = cookie.get("last_time")
             elapsed_seconds = None
             if isinstance(last_time_tuple, (list, tuple)):
@@ -115,6 +120,11 @@ class DiskIOResource(nagiosplugin.Resource):
                 except MissingValue as e:
                     logger.debug(f"{e}", exc_info=e)
             cookie["last_time"] = cur_time.timetuple()
+
+
+def escape_filename(value):
+    value = re.sub(r"[^\w\s-]", "_", value).strip().lower()
+    return re.sub(r"[-\s]+", '-', value)
 
 
 @nagiosplugin.guarded()
@@ -144,6 +154,16 @@ def main():
         default=False,
         help="Treat disk names as regex pattern",
         action="store_true",
+    )
+
+    argp.add_argument(
+        "--cookie-filename",
+        default="/tmp/check_disk_io_{name}.data",
+        help=(
+            "The filename to use to store the information to calculate the rate. '{name}' will be replaced with an "
+            "internal uniq id. It Will create one file per disk and mountpoint. "
+            "(Default: /tmp/check_disk_io_{name}.data)"
+        )
     )
 
     argp.add_argument(
@@ -233,73 +253,74 @@ def main():
     runtime = nagiosplugin.Runtime()
     runtime.verbose = args.verbose
 
-    disk_names = set()
     available_disk_names = psutil.disk_io_counters(perdisk=True).keys()
     logger.debug(f"Available disks: {', '.join(available_disk_names)}")
 
-    device_mountpont_mappings = dict([(disk_name, disk_name) for disk_name in available_disk_names])
+    device_mountpoint_mappings = set()
     if args.use_mountpoint or args.show_mountpoint:
         if psutil.LINUX:
-            device_mountpoint = []
             for partition in psutil.disk_partitions():
                 device_shortname = os.path.basename(os.path.realpath(partition.device))
                 logger.debug(f"Resolved display_name for device '{device_shortname}' to '{partition.mountpoint}'")
-                device_mountpoint.append((device_shortname, partition.mountpoint))
-            # We sort the devices and mountpoints to have a predictive order
-            device_mountpont_mappings = dict(sorted(device_mountpoint))
+                device_mountpoint_mappings.add((device_shortname, partition.mountpoint))
+    else:
+        for disk_name in available_disk_names:
+            device_mountpoint_mappings.add((disk_name, disk_name))
 
     logger.debug(f"Disk patterns/names: {', '.join(args.disks)}")
     logger.debug("Regex: {status}".format(status="enabled" if args.regex else "disabled"))
 
+    disks = set()
     # First add all matching disks to the list ...
     for disk_name_pattern in args.disks:
         if args.regex:
             regex = re.compile(disk_name_pattern)
-            for disk_name, mountpoint in device_mountpont_mappings.items():
+            for disk_name, mountpoint in device_mountpoint_mappings:
                 if (
                     not args.use_mountpoint and regex.match(disk_name) or
                     args.use_mountpoint and regex.match(mountpoint)
                 ):
-                    disk_names.add(disk_name)
+                    disks.add((disk_name, mountpoint))
         else:
-            for disk_name, mountpoint in device_mountpont_mappings.items():
+            for disk_name, mountpoint in device_mountpoint_mappings:
                 if (
                     not args.use_mountpoint and disk_name == disk_name_pattern or
                     args.use_mountpoint and mountpoint == disk_name_pattern
                 ):
-                    disk_names.add(disk_name)
+                    disks.add((disk_name, mountpoint))
 
     logger.debug(f"Disk exclude patterns/names: {', '.join(args.disk_excludes)}")
     # ... than remove all excluded from the list
     for disk_name_pattern in args.disk_excludes:
         if args.regex:
             regex = re.compile(disk_name_pattern)
-            for disk_name, mountpoint in device_mountpont_mappings.items():
+            for disk_name, mountpoint in device_mountpoint_mappings:
                 if (
                     not args.use_mountpoint and regex.match(disk_name) or
                     args.use_mountpoint and regex.match(mountpoint)
                 ):
-                    disk_names.remove(disk_name)
+                    disks.remove((disk_name, mountpoint))
         else:
-            for disk_name, mountpoint in device_mountpont_mappings.items():
+            for disk_name, mountpoint in device_mountpoint_mappings:
                 if (
                     not args.use_mountpoint and disk_name == disk_name_pattern or
                     args.use_mountpoint and mountpoint == disk_name_pattern
                 ):
-                    disk_names.remove(disk_name)
+                    disks.remove((disk_name, mountpoint))
 
-    logger.debug(f"Matching disks: {' '.join(disk_names)}")
+    logger.debug(f"Matching disks: {' '.join([disk[0] for disk in disks])}")
 
     check = nagiosplugin.Check()
-    for disk_name in disk_names:
+    for disk_name, mountpoint in disks:
         if args.show_mountpoint:
-            display_name = device_mountpont_mappings[disk_name]
+            display_name = mountpoint
         else:
             display_name = disk_name
 
         check.add(DiskIOResource(
             disk_name=disk_name,
             display_name=display_name,
+            cookie_filename=args.cookie_filename,
         ))
         for argument_name, argument_config in argument_mappings.items():
             extra_kwargs = {}
