@@ -1,6 +1,13 @@
 Changelog
 =========
 
+0.3 (2022-01-20)
+----------------
+
+- Add new option --cookie-filename to specify cookie name
+- Add new option --empty-ok
+- Fix issue if we try to ignore a device twice
+
 0.2 (2022-01-19)
 ----------------
 
