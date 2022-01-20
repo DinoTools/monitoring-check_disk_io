@@ -306,14 +306,14 @@ def main():
                     not args.use_mountpoint and regex.match(disk_name) or
                     args.use_mountpoint and regex.match(mountpoint)
                 ):
-                    disks.remove((disk_name, mountpoint))
+                    disks.discard((disk_name, mountpoint))
         else:
             for disk_name, mountpoint in device_mountpoint_mappings:
                 if (
                     not args.use_mountpoint and disk_name == disk_name_pattern or
                     args.use_mountpoint and mountpoint == disk_name_pattern
                 ):
-                    disks.remove((disk_name, mountpoint))
+                    disks.discard((disk_name, mountpoint))
 
     logger.debug(f"Matching disks: {' '.join([disk[0] for disk in disks])}")
 
