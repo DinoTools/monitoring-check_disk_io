@@ -167,6 +167,13 @@ def main():
     )
 
     argp.add_argument(
+        "--empty-ok",
+        default=False,
+        help="Report ok if the list of disks to check is empty.",
+        action="store_true",
+    )
+
+    argp.add_argument(
         "--show-mountpoint",
         default=False,
         help="Try to resolve and report the mountpoint instead of the device name. (only: Linux)",
@@ -311,6 +318,11 @@ def main():
     logger.debug(f"Matching disks: {' '.join([disk[0] for disk in disks])}")
 
     check = nagiosplugin.Check()
+    if len(disks) == 0:
+        if args.empty_ok:
+            check.results.add(nagiosplugin.Result(state=nagiosplugin.Ok, hint="No matching disks found"))
+        else:
+            check.results.add(nagiosplugin.Result(state=nagiosplugin.Warn, hint="No matching disks found"))
     for disk_name, mountpoint in disks:
         if args.show_mountpoint:
             display_name = mountpoint
